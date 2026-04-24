@@ -135,8 +135,8 @@ DeepSeek's API uses OpenAI-compatible settings:
 - **`thinkingFormat: "openai"`** — Reasoning models (V4 Pro, V4 Flash). Sends `thinking: { type: "enabled" }` via `extra_body`.
 - **`supportsReasoningEffort: true`** — V4 models. Supports `reasoning_effort: "high" | "max"`.
 - **`maxTokensField: "max_completion_tokens"`** — All models. DeepSeek supports `max_completion_tokens`.
-- **`supportsDeveloperRole: true`** — All models. DeepSeek accepts the `developer` role.
-- **`supportsStore: true`** — All models. DeepSeek supports the `store` parameter.
+- **`supportsDeveloperRole: false`** — All models. DeepSeek uses `system` role, not `developer`.
+- **`supportsStore: false`** — All models. DeepSeek doesn't support the `store` parameter.
 
 ### Patch Overrides
 

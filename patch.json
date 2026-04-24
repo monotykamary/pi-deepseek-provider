@@ -4,8 +4,8 @@
     "compat": {
       "thinkingFormat": "openai",
       "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": true,
-      "supportsStore": true,
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
       "supportsReasoningEffort": true
     }
   },
@@ -14,8 +14,8 @@
     "compat": {
       "thinkingFormat": "openai",
       "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": true,
-      "supportsStore": true,
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
       "supportsReasoningEffort": true
     }
   },
@@ -24,8 +24,8 @@
     "compat": {
       "thinkingFormat": "openai",
       "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": true,
-      "supportsStore": true,
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
       "supportsReasoningEffort": true
     }
   }

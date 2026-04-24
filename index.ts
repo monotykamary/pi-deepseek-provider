@@ -10,6 +10,9 @@
  *   - Context caching (cache hit pricing)
  *   - Anthropic API format at https://api.deepseek.com/anthropic
  *
+ * Note: DeepSeek does NOT support the `developer` role (use `system` instead)
+ * and does NOT support the `store` parameter. Both are set to false in compat.
+ *
  * Usage:
  *   # Option 1: Store in auth.json (recommended)
  *   # Add to ~/.pi/agent/auth.json:

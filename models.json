@@ -17,8 +17,8 @@
     "compat": {
       "thinkingFormat": "openai",
       "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": true,
-      "supportsStore": true,
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
       "supportsReasoningEffort": true
     }
   },
@@ -40,8 +40,8 @@
     "compat": {
       "thinkingFormat": "openai",
       "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": true,
-      "supportsStore": true,
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
       "supportsReasoningEffort": true
     }
   },
@@ -62,8 +62,8 @@
     "maxTokens": 384000,
     "compat": {
       "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": true,
-      "supportsStore": true
+      "supportsDeveloperRole": false,
+      "supportsStore": false
     }
   },
   {
@@ -84,8 +84,8 @@
     "compat": {
       "thinkingFormat": "openai",
       "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": true,
-      "supportsStore": true,
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
       "supportsReasoningEffort": true
     }
   }

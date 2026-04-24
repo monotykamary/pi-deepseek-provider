@@ -162,8 +162,8 @@ function transformApiModel(apiModel, existingModelsMap, patch) {
   // Add compat settings
   model.compat = {
     maxTokensField: 'max_completion_tokens',
-    supportsDeveloperRole: true,
-    supportsStore: true,
+    supportsDeveloperRole: false,
+    supportsStore: false,
   };
 
   if (model.reasoning && specs.thinkingFormat) {
