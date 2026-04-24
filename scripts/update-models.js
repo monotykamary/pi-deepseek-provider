@@ -10,7 +10,9 @@
  * but does NOT include pricing, context length, or max output tokens.
  * Pricing and model specs are maintained in the existing models.json and
  * carried forward for known models. New models get default pricing that
- * must be manually updated in patch.json.
+ * must be manually updated in models.json.
+ *
+ * patch.json is applied at runtime by the provider — not baked into models.json.
  *
  * Requires DEEPSEEK_API_KEY environment variable.
  */
@@ -24,7 +26,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MODELS_API_URL = 'https://api.deepseek.com/models';
 const MODELS_JSON_PATH = path.join(__dirname, '..', 'models.json');
 const README_PATH = path.join(__dirname, '..', 'README.md');
-const PATCH_PATH = path.join(__dirname, '..', 'patch.json');
 
 // ─── Pricing from DeepSeek official docs ─────────────────────────────────────
 // https://api-docs.deepseek.com/quick_start/pricing
@@ -132,7 +133,7 @@ async function fetchModels() {
 
 // ─── Transform API model → models.json entry ────────────────────────────────
 
-function transformApiModel(apiModel, existingModelsMap, patch) {
+function transformApiModel(apiModel, existingModelsMap) {
   const id = apiModel.id;
 
   // Start from existing model data if we have it (preserves pricing, compat, etc.)
@@ -189,38 +190,6 @@ function generateDisplayName(id) {
   return id
     .replace(/-/g, ' ')
     .replace(/\b\w/g, c => c.toUpperCase());
-}
-
-// ─── Apply patch overrides ───────────────────────────────────────────────────
-
-function applyPatch(model, patch) {
-  const overrides = patch[model.id];
-  if (!overrides) return model;
-
-  const merged = { ...model };
-  if (overrides.compat && merged.compat) {
-    merged.compat = { ...merged.compat, ...overrides.compat };
-    delete overrides.compat;
-  }
-  if (overrides.compat) {
-    merged.compat = { ...(merged.compat || {}), ...overrides.compat };
-    delete overrides.compat;
-  }
-  if (overrides.cost) {
-    merged.cost = { ...merged.cost, ...overrides.cost };
-    delete overrides.cost;
-  }
-  Object.assign(merged, overrides);
-
-  // Remove thinkingFormat from non-reasoning models
-  if (!merged.reasoning && merged.compat?.thinkingFormat) {
-    delete merged.compat.thinkingFormat;
-  }
-  if (merged.compat && Object.keys(merged.compat).length === 0) {
-    delete merged.compat;
-  }
-
-  return merged;
 }
 
 // ─── README generation ──────────────────────────────────────────────────────
@@ -285,13 +254,9 @@ async function main() {
       existingModelsMap[m.id] = m;
     }
 
-    // Load patch overrides
-    const patch = loadJson(PATCH_PATH);
-    console.log(`✓ Loaded patch with ${Object.keys(patch).length} overrides`);
-
     // Transform API models, preserving existing data where available
     let models = apiModels.map(m =>
-      transformApiModel(m, existingModelsMap, patch)
+      transformApiModel(m, existingModelsMap)
     );
 
     // Keep models from models.json that are NOT in the API response
@@ -302,9 +267,6 @@ async function main() {
         models.push(existing);
       }
     }
-
-    // Apply patch overrides
-    models = models.map(m => applyPatch(m, patch));
 
     // Sort: V4 Pro first, then V4 Flash, then deprecated models
     const FAMILY_ORDER = ['v4-pro', 'v4-flash', 'chat', 'reasoner'];
