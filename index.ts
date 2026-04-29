@@ -248,7 +248,11 @@ export default function (pi: ExtensionAPI) {
     await resolveApiKey(ctx.modelRegistry);
     revalidateModels(cachedApiKey, embeddedModels).then((freshBase) => {
       if (freshBase) {
-        pi.registerProvider("deepseek", { models: applyPatch(freshBase, patchData as PatchData) });
+        pi.registerProvider("deepseek", {
+          baseUrl: BASE_URL,
+          apiKey: "DEEPSEEK_API_KEY",
+          models: applyPatch(freshBase, patchData as PatchData),
+        });
       }
     });
   });
