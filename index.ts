@@ -146,11 +146,11 @@ function generateDisplayName(id: string): string {
 }
 
 /** Fetch live models from the provider's /models endpoint. */
-async function fetchLiveModels(apiKey: string): Promise<JsonModel[] | null> {
+async function fetchLiveModels(apiKey: string, signal?: AbortSignal): Promise<JsonModel[] | null> {
   try {
     const response = await fetch(MODELS_URL, {
       headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS), signal]) : AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS),
     });
     if (!response.ok) return null;
     const data = await response.json();
@@ -211,9 +211,9 @@ function loadStaleModels(embeddedModels: JsonModel[]): JsonModel[] {
  * Revalidate: fetch live, merge with embedded, cache on success.
  * Returns fresh base models, or null if fetch failed (caller keeps stale).
  */
-async function revalidateModels(apiKey: string | undefined, embeddedModels: JsonModel[]): Promise<JsonModel[] | null> {
+async function revalidateModels(apiKey: string | undefined, embeddedModels: JsonModel[], signal?: AbortSignal): Promise<JsonModel[] | null> {
   if (!apiKey) return null;
-  const liveModels = await fetchLiveModels(apiKey);
+  const liveModels = await fetchLiveModels(apiKey, signal);
   if (!liveModels || liveModels.length === 0) return null;
   const merged = mergeWithEmbedded(liveModels, embeddedModels);
   cacheModels(merged);
@@ -223,6 +223,7 @@ async function revalidateModels(apiKey: string | undefined, embeddedModels: Json
 // ─── API Key Resolution (via ModelRegistry) ────────────────────────────────────
 
 let cachedApiKey: string | undefined;
+let revalidateAbort: AbortController | null = null;
 
 async function resolveApiKey(modelRegistry: ModelRegistry): Promise<void> {
   cachedApiKey = await modelRegistry.getApiKeyForProvider("deepseek") ?? undefined;
@@ -245,9 +246,12 @@ export default function (pi: ExtensionAPI) {
 
   // Revalidate in background: fetch live → merge → cache → hot-swap
   pi.on("session_start", async (_event, ctx) => {
+    revalidateAbort?.abort();
+    revalidateAbort = new AbortController();
+    const signal = revalidateAbort.signal;
     await resolveApiKey(ctx.modelRegistry);
-    revalidateModels(cachedApiKey, embeddedModels).then((freshBase) => {
-      if (freshBase) {
+    revalidateModels(cachedApiKey, embeddedModels, signal).then((freshBase) => {
+      if (freshBase && !signal.aborted) {
         pi.registerProvider("deepseek", {
           baseUrl: BASE_URL,
           apiKey: "DEEPSEEK_API_KEY",
@@ -256,5 +260,9 @@ export default function (pi: ExtensionAPI) {
         });
       }
     });
+  });
+
+  pi.on("session_shutdown", () => {
+    revalidateAbort?.abort();
   });
 }
