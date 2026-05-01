@@ -8,9 +8,9 @@
  *
  * The DeepSeek /models API returns basic model info (id, owner, object type)
  * but does NOT include pricing, context length, or max output tokens.
- * Pricing and model specs are maintained in the existing models.json and
- * carried forward for known models. New models get default pricing that
- * must be manually updated in models.json.
+ * models.json is the source of truth for curated specs — the script preserves
+ * existing data and only adds new models with sensible defaults.
+ * Curate models.json manually after new model discovery.
  *
  * patch.json is applied at runtime by the provider — not baked into models.json.
  *
@@ -26,72 +26,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MODELS_API_URL = 'https://api.deepseek.com/models';
 const MODELS_JSON_PATH = path.join(__dirname, '..', 'models.json');
 const README_PATH = path.join(__dirname, '..', 'README.md');
-
-// ─── Pricing from DeepSeek official docs ─────────────────────────────────────
-// https://api-docs.deepseek.com/quick_start/pricing
-// Prices are per 1M tokens
-const PRICING = {
-  'deepseek-v4-pro': {
-    input: 1.74,
-    output: 3.48,
-    cacheRead: 0.145,
-  },
-  'deepseek-v4-flash': {
-    input: 0.14,
-    output: 0.28,
-    cacheRead: 0.028,
-  },
-  // deepseek-chat aliases deepseek-v4-flash (non-thinking mode)
-  'deepseek-chat': {
-    input: 0.14,
-    output: 0.28,
-    cacheRead: 0.028,
-  },
-  // deepseek-reasoner aliases deepseek-v4-flash (thinking mode)
-  'deepseek-reasoner': {
-    input: 0.14,
-    output: 0.28,
-    cacheRead: 0.028,
-  },
-};
-
-// Default pricing for unknown models (use flash pricing as baseline)
-const DEFAULT_PRICING = { input: 0.14, output: 0.28, cacheRead: 0.028 };
-
-// ─── Model metadata ─────────────────────────────────────────────────────────
-
-const MODEL_SPECS = {
-  'deepseek-v4-pro': {
-    name: 'DeepSeek V4 Pro',
-    reasoning: true,
-    contextWindow: 1_000_000,
-    maxTokens: 384_000,
-    thinkingFormat: 'openai',
-    supportsReasoningEffort: true,
-  },
-  'deepseek-v4-flash': {
-    name: 'DeepSeek V4 Flash',
-    reasoning: true,
-    contextWindow: 1_000_000,
-    maxTokens: 384_000,
-    thinkingFormat: 'openai',
-    supportsReasoningEffort: true,
-  },
-  'deepseek-chat': {
-    name: 'DeepSeek Chat (deprecated)',
-    reasoning: false,
-    contextWindow: 1_000_000,
-    maxTokens: 384_000,
-  },
-  'deepseek-reasoner': {
-    name: 'DeepSeek Reasoner (deprecated)',
-    reasoning: true,
-    contextWindow: 1_000_000,
-    maxTokens: 384_000,
-    thinkingFormat: 'openai',
-    supportsReasoningEffort: true,
-  },
-};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -136,43 +70,31 @@ async function fetchModels() {
 function transformApiModel(apiModel, existingModelsMap) {
   const id = apiModel.id;
 
-  // Start from existing model data if we have it (preserves pricing, compat, etc.)
+  // Preserve existing curated data (pricing, reasoning, compat, etc.)
   if (existingModelsMap[id]) {
     return { ...existingModelsMap[id] };
   }
 
-  // New model — build from known specs + defaults
-  const specs = MODEL_SPECS[id] || {};
-  const pricing = PRICING[id] || DEFAULT_PRICING;
-
+  // New model — sensible defaults; curate models.json manually after discovery
   const model = {
     id,
-    name: specs.name || generateDisplayName(id),
-    reasoning: specs.reasoning || false,
+    name: generateDisplayName(id),
+    reasoning: false,
     input: ['text'],
     cost: {
-      input: pricing.input,
-      output: pricing.output,
-      cacheRead: pricing.cacheRead,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
       cacheWrite: 0,
     },
-    contextWindow: specs.contextWindow || 1_000_000,
-    maxTokens: specs.maxTokens || 384_000,
+    contextWindow: 131072,
+    maxTokens: 16384,
+    compat: {
+      maxTokensField: 'max_completion_tokens',
+      supportsDeveloperRole: false,
+      supportsStore: false,
+    },
   };
-
-  // Add compat settings
-  model.compat = {
-    maxTokensField: 'max_completion_tokens',
-    supportsDeveloperRole: false,
-    supportsStore: false,
-  };
-
-  if (model.reasoning && specs.thinkingFormat) {
-    model.compat.thinkingFormat = specs.thinkingFormat;
-  }
-  if (specs.supportsReasoningEffort) {
-    model.compat.supportsReasoningEffort = true;
-  }
 
   return model;
 }
@@ -180,8 +102,8 @@ function transformApiModel(apiModel, existingModelsMap) {
 function generateDisplayName(id) {
   // Handle known naming patterns
   if (id.startsWith('deepseek-v')) {
-    const version = id.replace('deepseek-v', '').replace(/-/g, ' ');
-    return `DeepSeek V${version.charAt(0).toUpperCase()}${version.slice(1)}`;
+    const rest = id.replace('deepseek-v', '').replace(/-/g, ' ');
+    return `DeepSeek V${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
   }
   if (id === 'deepseek-chat') return 'DeepSeek Chat (deprecated)';
   if (id === 'deepseek-reasoner') return 'DeepSeek Reasoner (deprecated)';
@@ -247,7 +169,7 @@ async function main() {
   try {
     const apiModels = await fetchModels();
 
-    // Load existing models.json for pricing/compat preservation
+    // Load existing models.json — source of truth for curated specs
     const existingModels = loadJson(MODELS_JSON_PATH);
     const existingModelsMap = {};
     for (const m of (Array.isArray(existingModels) ? existingModels : [])) {
@@ -294,7 +216,7 @@ async function main() {
     console.log('\n--- Summary ---');
     console.log(`Total models: ${models.length}`);
     console.log(`Reasoning models: ${models.filter(m => m.reasoning).length}`);
-    if (added.length > 0) console.log(`New models: ${added.join(', ')}`);
+    if (added.length > 0) console.log(`New models: ${added.join(', ')} — curate models.json manually`);
     if (removed.length > 0) console.log(`Removed models: ${removed.join(', ')}`);
 
   } catch (error) {
