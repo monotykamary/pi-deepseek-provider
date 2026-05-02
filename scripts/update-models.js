@@ -195,10 +195,13 @@ async function main() {
     models.sort((a, b) => {
       const aIdx = FAMILY_ORDER.findIndex(f => a.id.includes(f));
       const bIdx = FAMILY_ORDER.findIndex(f => b.id.includes(f));
-      if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+      if (aIdx !== -1 && bIdx !== -1) {
+        if (aIdx !== bIdx) return aIdx - bIdx;
+        return a.id.localeCompare(b.id);
+      }
       if (aIdx !== -1) return -1;
       if (bIdx !== -1) return 1;
-      return a.name.localeCompare(b.name);
+      return a.id.localeCompare(b.id);
     });
 
     // Save models.json
