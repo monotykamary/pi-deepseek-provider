@@ -61,8 +61,6 @@ Get your API key at [platform.deepseek.com/api_keys](https://platform.deepseek.c
 
 | Model | Context | Reasoning | Reasoning Effort | Input $/M | Output $/M | Cache Hit $/M |
 |-------|---------|-----------|------------------|-----------|------------|---------------|
-| DeepSeek Chat (deprecated) | 1M | ❌ | ❌ | $0.140 | $0.280 | $0.028 |
-| DeepSeek Reasoner (deprecated) | 1M | ✅ | ✅ | $0.140 | $0.280 | $0.028 |
 | DeepSeek V4 Flash | 1M | ✅ | ✅ | $0.140 | $0.280 | $0.028 |
 | DeepSeek V4 Pro | 1M | ✅ | ✅ | $1.740 | $3.480 | $0.145 |
 
