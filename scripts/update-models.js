@@ -238,14 +238,8 @@ async function main() {
       transformApiModel(m, existingModelsMap)
     );
 
-    // Keep models from models.json that are NOT in the API response
-    // (e.g. deprecated but still usable models)
-    const apiIds = new Set(apiModels.map(m => m.id));
-    for (const existing of Object.values(existingModelsMap)) {
-      if (!apiIds.has(existing.id)) {
-        models.push(existing);
-      }
-    }
+    // Live API is authoritative — models absent from API are removed
+    // (embedded data is already used for enrichment in transformApiModel)
 
     // Sort: V4 Pro first, then V4 Flash, then deprecated models
     const FAMILY_ORDER = ['v4-pro', 'v4-flash', 'chat', 'reasoner'];
