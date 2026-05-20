@@ -1,0 +1,13 @@
+{
+  "name": "pi-deepseek-provider",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "pi-deepseek-provider",
+      "version": "1.0.0",
+      "license": "MIT"
+    }
+  }
+}
