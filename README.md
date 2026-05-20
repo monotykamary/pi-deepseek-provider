@@ -19,7 +19,7 @@ A [pi](https://github.com/badlogic/pi-mono) extension that registers [DeepSeek](
 Install directly from GitHub:
 
 ```bash
-pi install git:github.com/monotykamary/pi-deepseek-provider
+pi install https://github.com/monotykamary/pi-deepseek-provider
 ```
 
 Then set your API key and run pi:
