@@ -1,6 +1,17 @@
-# pi-deepseek-provider
+<div align="center">
 
-A [pi](https://github.com/badlogic/pi-mono) extension that registers [DeepSeek](https://deepseek.com/) as a custom provider. Access DeepSeek V4 Pro, V4 Flash, and Reasoner models through the DeepSeek API.
+# 🐋 pi-deepseek-provider
+
+**DeepSeek V4 Pro, V4 Flash & Reasoner for [pi](https://github.com/earendil-works/pi-coding-agent)**
+
+_Native DeepSeek API with 1M context, thinking mode, and context caching._
+
+[![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://github.com/earendil-works/pi-coding-agent)
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
+</div>
+
+---
 
 ## Features
 
