@@ -6,12 +6,16 @@
  *
  * DeepSeek's API is fully OpenAI-compatible and supports:
  *   - Thinking mode via `thinking: {type: "enabled/disabled"}` + `reasoning_effort`
- *   - Chain-of-thought in `reasoning_content` (interleaved format)
+ *     (the "deepseek" thinkingFormat)
+ *   - Chain-of-thought returned in `reasoning_content` (interleaved format)
  *   - Context caching (cache hit pricing)
  *   - Anthropic API format at https://api.deepseek.com/anthropic
  *
- * Note: DeepSeek does NOT support the `developer` role (use `system` instead)
- * and does NOT support the `store` parameter. Both are set to false in compat.
+ * Compat settings (developer role, store param, max_tokens field) are auto-detected
+ * from deepseek.com baseUrl by pi core. Only DeepSeek-specific settings are provided:
+ *   - thinkingFormat: "deepseek"
+ *   - supportsReasoningEffort: true
+ *   - requiresReasoningContentOnAssistantMessages: true (replayed messages need empty reasoning_content)
  *
  * Model resolution strategy: Stale-While-Revalidate
  *   1. Serve stale immediately: disk cache → embedded models.json (zero-latency)
@@ -57,12 +61,14 @@ interface JsonModel {
   };
   contextWindow: number;
   maxTokens: number;
+  thinkingLevelMap?: Record<string, string | null>;
   compat?: {
     supportsDeveloperRole?: boolean;
     supportsStore?: boolean;
     maxTokensField?: "max_completion_tokens" | "max_tokens";
-    thinkingFormat?: "openai" | "zai" | "qwen" | "qwen-chat-template";
+    thinkingFormat?: "openai" | "zai" | "qwen" | "qwen-chat-template" | "deepseek" | "openrouter" | "together" | "string-thinking";
     supportsReasoningEffort?: boolean;
+    requiresReasoningContentOnAssistantMessages?: boolean;
   };
 }
 
@@ -78,6 +84,7 @@ interface PatchEntry {
   };
   contextWindow?: number;
   maxTokens?: number;
+  thinkingLevelMap?: Record<string, string | null>;
   compat?: Record<string, unknown>;
 }
 
@@ -93,6 +100,7 @@ function applyPatch(model: JsonModel, patch: PatchEntry): JsonModel {
   if (patch.input !== undefined) result.input = patch.input;
   if (patch.contextWindow !== undefined) result.contextWindow = patch.contextWindow;
   if (patch.maxTokens !== undefined) result.maxTokens = patch.maxTokens;
+  if (patch.thinkingLevelMap !== undefined) result.thinkingLevelMap = { ...patch.thinkingLevelMap };
 
   if (patch.cost) {
     result.cost = {
@@ -145,7 +153,32 @@ function buildModels(base: JsonModel[], custom: JsonModel[], patch: PatchData): 
     }
   }
 
-  return Array.from(modelMap.values());
+  const result = Array.from(modelMap.values());
+
+  // Ensure all reasoning models have the required DeepSeek compat settings.
+  // Live-fetched models from the SWR pipeline may not have these set.
+  for (const model of result) {
+    if (!model.reasoning) continue;
+    if (!model.compat) {
+      model.compat = {
+        thinkingFormat: "deepseek",
+        supportsReasoningEffort: true,
+        requiresReasoningContentOnAssistantMessages: true,
+      };
+    } else {
+      if (model.compat.thinkingFormat === undefined) {
+        model.compat.thinkingFormat = "deepseek";
+      }
+      if (model.compat.supportsReasoningEffort === undefined) {
+        model.compat.supportsReasoningEffort = true;
+      }
+      if (model.compat.requiresReasoningContentOnAssistantMessages === undefined) {
+        model.compat.requiresReasoningContentOnAssistantMessages = true;
+      }
+    }
+  }
+
+  return result;
 }
 
 // ─── Stale-While-Revalidate Model Sync ────────────────────────────────────────

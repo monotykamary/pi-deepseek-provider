@@ -92,11 +92,6 @@ function transformApiModel(apiModel, existingModelsMap) {
     },
     contextWindow: 131072,
     maxTokens: 16384,
-    compat: {
-      maxTokensField: 'max_completion_tokens',
-      supportsDeveloperRole: false,
-      supportsStore: false,
-    },
   };
 
   return model;
@@ -124,6 +119,7 @@ function applyPatch(model, patch) {
   if (patch.input !== undefined) result.input = patch.input;
   if (patch.contextWindow !== undefined) result.contextWindow = patch.contextWindow;
   if (patch.maxTokens !== undefined) result.maxTokens = patch.maxTokens;
+  if (patch.thinkingLevelMap !== undefined) result.thinkingLevelMap = { ...patch.thinkingLevelMap };
   if (patch.cost) {
     result.cost = {
       input: patch.cost.input ?? result.cost.input,
@@ -168,7 +164,32 @@ function buildModels(baseModels, customModels, patchData) {
       modelMap.set(model.id, model);
     }
   }
-  return Array.from(modelMap.values());
+  const result = Array.from(modelMap.values());
+
+  // Ensure all reasoning models have the required DeepSeek compat settings.
+  // Live-fetched models from the SWR pipeline may not have these set.
+  for (const model of result) {
+    if (!model.reasoning) continue;
+    if (!model.compat) {
+      model.compat = {
+        thinkingFormat: "deepseek",
+        supportsReasoningEffort: true,
+        requiresReasoningContentOnAssistantMessages: true,
+      };
+    } else {
+      if (model.compat.thinkingFormat === undefined) {
+        model.compat.thinkingFormat = "deepseek";
+      }
+      if (model.compat.supportsReasoningEffort === undefined) {
+        model.compat.supportsReasoningEffort = true;
+      }
+      if (model.compat.requiresReasoningContentOnAssistantMessages === undefined) {
+        model.compat.requiresReasoningContentOnAssistantMessages = true;
+      }
+    }
+  }
+
+  return result;
 }
 
 // ─── README generation ──────────────────────────────────────────────────────

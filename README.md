@@ -72,8 +72,8 @@ Get your API key at [platform.deepseek.com/api_keys](https://platform.deepseek.c
 
 | Model | Context | Reasoning | Reasoning Effort | Input $/M | Output $/M | Cache Hit $/M |
 |-------|---------|-----------|------------------|-----------|------------|---------------|
-| DeepSeek V4 Flash | 1M | ✅ | ✅ | $0.140 | $0.280 | $0.028 |
-| DeepSeek V4 Pro | 1M | ✅ | ✅ | $1.740 | $3.480 | $0.145 |
+| DeepSeek V4 Flash | 1M | ✅ | ✅ | $0.140 | $0.280 | $0.003 |
+| DeepSeek V4 Pro | 1M | ✅ | ✅ | $0.435 | $0.870 | $0.004 |
 
 *Costs are per million tokens. Prices subject to change — check [api-docs.deepseek.com](https://api-docs.deepseek.com/quick_start/pricing) for current pricing.*
 
@@ -95,7 +95,7 @@ pi --provider deepseek --model deepseek-v4-pro
 
 ### Thinking Mode
 
-DeepSeek V4 models support both thinking and non-thinking modes. Thinking mode is enabled by default. In pi, reasoning models automatically use the `openai` thinking format (`thinking: {type: "enabled"}`).
+DeepSeek V4 models support both thinking and non-thinking modes. Thinking mode is enabled by default. In pi, reasoning models use the `deepseek` thinking format which sends `thinking: {type: "enabled/disabled"}` plus `reasoning_effort` mapped from pi's thinking levels.
 
 To control reasoning effort, use the `--reasoning-effort` flag:
 
@@ -139,13 +139,12 @@ Add to your pi configuration for automatic loading:
 
 ### Compat Settings
 
-DeepSeek's API uses OpenAI-compatible settings:
+DeepSeek's API uses these provider-specific compatibility settings:
 
-- **`thinkingFormat: "openai"`** — Reasoning models (V4 Pro, V4 Flash). Sends `thinking: { type: "enabled" }` via `extra_body`.
+- **`thinkingFormat: "deepseek"`** — Reasoning models (V4 Pro, V4 Flash). Sends `thinking: {type: "enabled"/"disabled"}` to toggle thinking mode. When enabled, `reasoning_effort` is mapped via `thinkingLevelMap` (`high` → `"high"`, `xhigh` → `"max"`). Minimal/low/medium are unsupported (null).
 - **`supportsReasoningEffort: true`** — V4 models. Supports `reasoning_effort: "high" | "max"`.
-- **`maxTokensField: "max_completion_tokens"`** — All models. DeepSeek supports `max_completion_tokens`.
-- **`supportsDeveloperRole: false`** — All models. DeepSeek uses `system` role, not `developer`.
-- **`supportsStore: false`** — All models. DeepSeek doesn't support the `store` parameter.
+- **`requiresReasoningContentOnAssistantMessages: true`** — V4 models. Replayed assistant messages include empty `reasoning_content` when reasoning is enabled, required by DeepSeek's API.
+- **`supportsDeveloperRole`, `supportsStore`, `maxTokensField`** — Auto-detected from `baseUrl` (deepseek.com). Not explicitly set.
 
 ### Patch Overrides
 

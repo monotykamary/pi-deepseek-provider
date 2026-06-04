@@ -1,32 +1,47 @@
 {
   "deepseek-v4-pro": {
     "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": "max"
+    },
     "compat": {
-      "thinkingFormat": "openai",
-      "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": false,
-      "supportsStore": false,
-      "supportsReasoningEffort": true
+      "thinkingFormat": "deepseek",
+      "supportsReasoningEffort": true,
+      "requiresReasoningContentOnAssistantMessages": true
     }
   },
   "deepseek-v4-flash": {
     "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": "max"
+    },
     "compat": {
-      "thinkingFormat": "openai",
-      "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": false,
-      "supportsStore": false,
-      "supportsReasoningEffort": true
+      "thinkingFormat": "deepseek",
+      "supportsReasoningEffort": true,
+      "requiresReasoningContentOnAssistantMessages": true
     }
   },
   "deepseek-reasoner": {
     "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": "max"
+    },
     "compat": {
-      "thinkingFormat": "openai",
-      "maxTokensField": "max_completion_tokens",
-      "supportsDeveloperRole": false,
-      "supportsStore": false,
-      "supportsReasoningEffort": true
+      "thinkingFormat": "deepseek",
+      "supportsReasoningEffort": true,
+      "requiresReasoningContentOnAssistantMessages": true
     }
   }
 }
