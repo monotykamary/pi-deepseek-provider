@@ -418,8 +418,32 @@ const KEEP_THINKING_TURNS = parseInt(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+
+// Model-ID prefixes that indicate a DeepSeek model, regardless of provider.
+// Covers: deepseek-chat, deepseek-reasoner, deepseek-v4-flash, deepseek-v4-pro, etc.
+// Also covers provider-prefixed IDs like openrouter's deepseek/deepseek-v4-flash
+const DEEPSEEK_MODEL_PREFIXES = ["deepseek-", "deepseek/"];
+
+// Additional providers to enable cache optimizations for (from env var).
+// Set DEEPSEEK_CACHE_PROVIDERS=openrouter,together to enable for those providers.
+const extraCacheProviders = new Set(
+  (process.env.DEEPSEEK_CACHE_PROVIDERS || "").split(",").map(p => p.trim()).filter(Boolean)
+);
+
 function isDeepSeekModel(ctx: { model?: { provider?: string; id?: string } }): boolean {
-  return ctx.model?.provider === "deepseek";
+  const provider = ctx.model?.provider;
+  const id = ctx.model?.id ?? "";
+
+  // 1. Native deepseek provider always matches
+  if (provider === "deepseek") return true;
+
+  // 2. Match by model ID prefix (e.g. openrouter/deepseek-v4-flash)
+  if (DEEPSEEK_MODEL_PREFIXES.some(prefix => id.startsWith(prefix))) return true;
+
+  // 3. Explicit provider allowlist via env var
+  if (provider && extraCacheProviders.has(provider)) return true;
+
+  return false;
 }
 
 function extractPayloadInfo(payload: unknown): {

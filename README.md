@@ -143,6 +143,16 @@ DeepSeek's prefix cache requires the byte-stable prefix to remain identical acro
 | `DEEPSEEK_API_KEY` | — | Your DeepSeek API key (fallback if not in auth.json) |
 | `DEEPSEEK_CACHE_STRIP_THINKING` | `"true"` | Strip older thinking content to reduce prefix size. Set to `"false"` to disable. |
 | `DEEPSEEK_CACHE_KEEP_THINKING_TURNS` | `"2"` | Number of recent turns to keep full thinking content for. Only applies when stripping is enabled. |
+| `DEEPSEEK_CACHE_PROVIDERS` | — | Comma-separated list of additional providers to enable cache optimizations for (e.g., `openrouter,together`). |
+
+### Using with Other Providers
+
+The cache optimizations activate automatically for DeepSeek models by detecting the model ID — they work regardless of which provider routes the request. Specifically, optimizations are enabled when **any** of these conditions are true:
+
+1. The provider is `deepseek` (direct API)
+2. The model ID starts with `deepseek-` or `deepseek/` (e.g., OpenRouter's `deepseek/deepseek-v4-flash`)
+3. The provider is listed in `DEEPSEEK_CACHE_PROVIDERS` env var
+
 
 ## Usage
 
