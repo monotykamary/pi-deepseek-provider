@@ -595,7 +595,12 @@ export default function (pi: ExtensionAPI) {
   // and is unaffected by compaction events.
 
   pi.on("message_end", (event, ctx) => {
-    if (!isDeepSeekModel(ctx)) return;
+    // Non-DeepSeek model: clear any stale cache status so it doesn't linger
+    // from a previous DeepSeek turn.
+    if (!isDeepSeekModel(ctx)) {
+      ctx.ui.setStatus("deepseek-cache", undefined);
+      return;
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const msg = event.message as any;
@@ -654,18 +659,20 @@ export default function (pi: ExtensionAPI) {
     // the summarizer API call (and the cache-bust that follows)
     const messagesToSummarize = preparation.messagesToSummarize?.length ?? 0;
     if (messagesToSummarize < MIN_COMPACT_MESSAGES) {
-      console.warn(
-        `[deepseek-cache] Compaction skipped: only ${messagesToSummarize} messages to summarize ` +
-        `(minimum ${MIN_COMPACT_MESSAGES} for economic viability)`
+      ctx.ui.notify(
+        `Compaction skipped: only ${messagesToSummarize} messages to summarize ` +
+        `(minimum ${MIN_COMPACT_MESSAGES} for economic viability).`,
+        "info",
       );
       return { cancel: true };
     }
 
     // Soft threshold: log but don't compact yet
     if (ratio < COMPACT_SOFT_RATIO) {
-      console.warn(
-        `[deepseek-cache] Context at ${(ratio * 100).toFixed(0)}% — below soft threshold ` +
-        `${(COMPACT_SOFT_RATIO * 100).toFixed(0)}%. Compaction deferred to preserve cache.`
+      ctx.ui.notify(
+        `Context at ${(ratio * 100).toFixed(0)}% — below soft threshold ` +
+        `${(COMPACT_SOFT_RATIO * 100).toFixed(0)}%. Compaction deferred to preserve cache.`,
+        "info",
       );
       return { cancel: true };
     }
@@ -675,10 +682,11 @@ export default function (pi: ExtensionAPI) {
       const hitRate = cacheState.sessionCacheHit + cacheState.sessionCacheMiss > 0
         ? Math.round(100 * cacheState.sessionCacheHit / (cacheState.sessionCacheHit + cacheState.sessionCacheMiss))
         : 0;
-      console.warn(
-        `[deepseek-cache] Context at ${(ratio * 100).toFixed(0)}% — between soft ` +
+      ctx.ui.notify(
+        `Context at ${(ratio * 100).toFixed(0)}% — between soft ` +
         `(${(COMPACT_SOFT_RATIO * 100).toFixed(0)}%) and hard (${(COMPACT_HARD_RATIO * 100).toFixed(0)}%) thresholds. ` +
-        `Current cache hit rate: ${hitRate}%. Compacting will reset the prefix cache.`
+        `Current cache hit rate: ${hitRate}%. Compacting will reset the prefix cache.`,
+        "warning",
       );
       // Allow compact — let pi decide
       return;
@@ -686,10 +694,11 @@ export default function (pi: ExtensionAPI) {
 
     // Hard threshold hit, but check if we're stuck
     if (cacheState.compactStuck) {
-      console.warn(
-        `[deepseek-cache] Auto-compaction paused: the system prompt + one turn exceeds ` +
+      ctx.ui.notify(
+        `Auto-compaction paused: the system prompt + one turn exceeds ` +
         `${(COMPACT_HARD_RATIO * 100).toFixed(0)}% of the context window. ` +
-        `Compaction can't help — growing append-only instead.`
+        `Compaction can't help — growing append-only instead.`,
+        "warning",
       );
       return { cancel: true };
     }
@@ -698,9 +707,10 @@ export default function (pi: ExtensionAPI) {
     cacheState.consecutiveCompacts++;
     if (cacheState.consecutiveCompacts >= 3) {
       cacheState.compactStuck = true;
-      console.warn(
-        `[deepseek-cache] Compaction stuck guard triggered: ${cacheState.consecutiveCompacts} consecutive ` +
-        `compactions haven't reduced context below the threshold. Auto-compaction paused for DeepSeek.`
+      ctx.ui.notify(
+        `Compaction stuck guard triggered: ${cacheState.consecutiveCompacts} consecutive ` +
+        `compactions haven't reduced context below the threshold. Auto-compaction paused for DeepSeek.`,
+        "warning",
       );
       return { cancel: true };
     }
