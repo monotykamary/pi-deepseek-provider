@@ -1,6 +1,6 @@
 {
   "name": "pi-deepseek-provider",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "DeepSeek provider extension for pi - V4 Pro, V4 Flash & Reasoner with prefix cache optimization",
   "type": "module",
   "main": "index.ts",
