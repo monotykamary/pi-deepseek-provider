@@ -210,7 +210,7 @@ Add to your pi configuration for automatic loading:
 
 DeepSeek's API uses these provider-specific compatibility settings:
 
-- **`thinkingFormat: "deepseek"`** — Reasoning models (V4 Pro, V4 Flash). Sends `thinking: {type: "enabled"/"disabled"}` to toggle thinking mode. When enabled, `reasoning_effort` is mapped via `thinkingLevelMap` (`high` → `"high"`, `xhigh` → `"max"`). Minimal/low/medium are unsupported (null).
+- **`thinkingFormat: "deepseek"`** — Reasoning models (V4 Pro, V4 Flash). Sends `thinking: {type: "enabled"/"disabled"}` to toggle thinking mode. When enabled, `reasoning_effort` is mapped via `thinkingLevelMap` (`high` → `"high"`, `max` → `"max"`). Minimal/low/medium are unsupported (null).
 - **`supportsReasoningEffort: true`** — V4 models. Supports `reasoning_effort: "high" | "max"`.
 - **`requiresReasoningContentOnAssistantMessages: true`** — V4 models. Replayed assistant messages include empty `reasoning_content` when reasoning is enabled, required by DeepSeek's API.
 - **`supportsDeveloperRole`, `supportsStore`, `maxTokensField`** — Auto-detected from `baseUrl` (deepseek.com). Not explicitly set.
