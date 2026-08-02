@@ -28,20 +28,5 @@
       "supportsReasoningEffort": true,
       "requiresReasoningContentOnAssistantMessages": true
     }
-  },
-  "deepseek-reasoner": {
-    "reasoning": true,
-    "thinkingLevelMap": {
-      "minimal": null,
-      "low": null,
-      "medium": null,
-      "high": "high",
-      "max": "max"
-    },
-    "compat": {
-      "thinkingFormat": "deepseek",
-      "supportsReasoningEffort": true,
-      "requiresReasoningContentOnAssistantMessages": true
-    }
   }
 }
