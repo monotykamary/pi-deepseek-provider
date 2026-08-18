@@ -72,8 +72,8 @@ Get your API key at [platform.deepseek.com/api_keys](https://platform.deepseek.c
 
 | Model | Context | Reasoning | Reasoning Effort | Input $/M | Output $/M | Cache Hit $/M |
 |-------|---------|-----------|------------------|-----------|------------|---------------|
-| DeepSeek V4 Flash | 1M | ✅ | ✅ | $0.140 | $0.280 | $0.003 |
-| DeepSeek V4 Pro | 1M | ✅ | ✅ | $0.435 | $0.870 | $0.004 |
+| DeepSeek V4 Flash | 1M | ✅ | ✅ | $0.14 | $0.28 | $0.00 |
+| DeepSeek V4 Pro | 1M | ✅ | ✅ | $0.43 | $0.87 | $0.00 |
 
 *Costs are per million tokens. Prices subject to change — check [api-docs.deepseek.com](https://api-docs.deepseek.com/quick_start/pricing) for current pricing.*
 
