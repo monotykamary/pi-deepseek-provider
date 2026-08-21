@@ -1,6 +1,6 @@
 {
   "name": "pi-deepseek-provider",
-  "version": "2.2.1",
+  "version": "3.0.0",
   "description": "DeepSeek provider extension for pi - V4 Pro, V4 Flash & Reasoner with 1M context and thinking mode",
   "type": "module",
   "main": "index.ts",
