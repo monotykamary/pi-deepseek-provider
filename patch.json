@@ -14,6 +14,9 @@
       "requiresReasoningContentOnAssistantMessages": true
     }
   },
+  "deepseek-v4-flash-vision-exp": {
+    "input": ["text", "image"]
+  },
   "deepseek-v4-flash": {
     "reasoning": true,
     "thinkingLevelMap": {
