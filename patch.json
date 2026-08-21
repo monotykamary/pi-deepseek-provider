@@ -15,7 +15,29 @@
     }
   },
   "deepseek-v4-flash-vision-exp": {
-    "input": ["text", "image"]
+    "name": "DeepSeek V4 Flash Vision Exp",
+    "reasoning": true,
+    "input": ["text", "image"],
+    "contextWindow": 1000000,
+    "maxTokens": 384000,
+    "cost": {
+      "input": 0.14,
+      "output": 0.28,
+      "cacheRead": 0.0028,
+      "cacheWrite": 0
+    },
+    "thinkingLevelMap": {
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "max": "max"
+    },
+    "compat": {
+      "thinkingFormat": "deepseek",
+      "supportsReasoningEffort": true,
+      "requiresReasoningContentOnAssistantMessages": true
+    }
   },
   "deepseek-v4-flash": {
     "reasoning": true,
