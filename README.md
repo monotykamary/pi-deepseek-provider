@@ -96,18 +96,20 @@ Tool schemas are a large chunk of the request prefix and the most common source 
 
 ### 2. Cache-Aware Compaction Gating
 
-Compaction is the biggest cache-killer — it rewrites the message history, invalidating the entire cached prefix. This extension intercepts `session_before_compact` and applies Reasonix's strategy:
+Compaction is the biggest cache-killer — it kills the message history, invalidating the entire cached prefix. This extension intercepts `session_before_compact` to protect the cache **without ever blocking the user**:
 
-| Threshold | Context % | Action |
-|-----------|-----------|--------|
-| Soft | 50% | Log notice, don't compact |
-| Hard | 80% | Allow compaction |
-| Stuck | Consecutive | Pause auto-compaction |
+| Context | Behavior |
+|---------|----------|
+| Manual `/compact` | Always allowed — no soft threshold |
+| Overflow recovery | Always allowed |
+| Context threshold (pi's own rule) | Allowed; only skipped when economically wasteful |
+| Stuck (consecutive failures) | Automatic compaction paused; manual still works |
 
-- **Economic check:** Skips compaction when fewer than 4 messages would be summarized — the summarizer API call costs more than it saves.
-- **Stuck guard:** If compaction can't reduce context below the threshold (system prompt + one turn > 80% of window), pauses auto-compaction and lets the prefix grow append-only instead of cratering the cache every turn.
+- **No soft threshold:** Automatic compaction now follows pi's own rule (`contextTokens > contextWindow - reserveTokens`). A 1M-context model no longer needs to fill half the window before compacting; manual `/compact` always works at any context size.
+- **Economic check:** Skips *automatic* compaction when fewer than 4 messages would be summarized — the summarizer API call costs more than it saves. Manual compaction is never skipped.
+- **Stuck guard:** If automatic compaction repeatedly fails to reduce the context (system prompt + conversation exceeds the window), pauses *automatic* compaction so the prefix can grow append-only instead of cratering the cache every turn.
 
-**Impact:** Prevents the #1 cause of cache invalidation in long sessions.
+**Impact:** Keeps the prefix cache warm without overriding the user's choice to compact.
 
 ### 3. Cache Hit Diagnostics
 

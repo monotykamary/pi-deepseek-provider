@@ -356,21 +356,23 @@ function canonicalizeToolSchemas(tools: unknown[]): unknown[] {
 // ─── Optimization 2: Cache-Aware Compaction Gating ──────────────────────────
 //
 // Compaction is the biggest cache-killer — it rewrites the message history,
-// invalidating the entire prefix that DeepSeek cached. Reasonix's approach:
+// invalidating the entire prefix that DeepSeek cached. The policy here is
+// deliberately permissive so caching never overrides the user:
 //
-//   - Soft threshold (50%): log a notice but do NOT compact
-//   - Hard threshold (80%): compact normally
-//   - Stuck guard: if compaction can't get the prompt below the threshold
-//     (system prompt + one turn > 80% of window), pause auto-compaction and
-//     let the prefix grow append-only rather than cratering the cache every turn
-//   - Economic check: don't compact if the region is too small to justify
-//     the summarizer API call
+//   - Manual `/compact` and overflow recovery: ALWAYS allowed, no soft
+//     threshold. A 1M-context model must not need to fill 500k to compact.
+//   - Automatic compaction: pi's own threshold decides
+//     (contextTokens > contextWindow - reserveTokens); nothing here defers
+//     it further.
+//   - Economic check: skip AUTO compaction when the summarizable region is
+//     too small to justify the summarizer API call.
+//   - Stuck guard: if auto-compaction repeatedly fails to shrink the
+//     context, pause automatic compaction so the prefix can keep a stable
+//     cache instead of being cratered every turn.
 //
-// In pi, auto-compaction triggers when contextTokens > contextWindow - reserveTokens.
-// We intercept `session_before_compact` to apply these policies for DeepSeek sessions.
+// We intercept `session_before_compact` to apply the protections above.
 
-const COMPACT_SOFT_RATIO = 0.5;
-const COMPACT_HARD_RATIO = 0.8;
+const COMPACT_STUCK_LIMIT = 3;
 const MIN_COMPACT_MESSAGES = 4;
 
 // ─── Optimization 3+4: Cache Diagnostics + Session-Aggregate Display ─────────
@@ -619,10 +621,15 @@ export default function (pi: ExtensionAPI) {
       const pct = cacheState.sessionCacheHit + cacheState.sessionCacheMiss > 0
         ? Math.round(100 * cacheState.sessionCacheHit / (cacheState.sessionCacheHit + cacheState.sessionCacheMiss))
         : 0;
-      console.warn(
-        `[deepseek-cache] Prefix changed: ${reasons.join(", ")} — ` +
-        `previous cache hit rate was ${pct}% across ${cacheState.turnCount} turns`
-      );
+      // Notify through the TUI instead of raw console output — a direct
+      // console.warn from an extension corrupts pi's interactive renderer.
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          `Prefix cache changed: ${reasons.join(", ")} — ` +
+          `previous cache hit rate was ${pct}% across ${cacheState.turnCount} turns`,
+          "warning",
+        );
+      }
     }
 
     cacheState.prevShape = shape;
@@ -679,86 +686,66 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ── Optimization 2: Cache-Aware Compaction Gating ─────────────────────────
+  // ── Optimization 2: Cache-Aware Compaction Gating ───────────────────────
   //
-  // Intercept compaction for DeepSeek sessions. Goals:
-  //   1. Defer compaction until a higher threshold (hard 80% vs pi's default)
-  //   2. Skip if too few messages to be worth the summarizer call
-  //   3. Detect stuck compaction (can't get below threshold) and pause it
+  // Compaction can never override the user. Goals:
+  //   1. Manual `/compact` and overflow recovery ALWAYS proceed — there is
+  //      no soft threshold, so a 1M-context model can compact at any size.
+  //   2. Automatic (threshold) compaction follows pi's own trigger rule; it
+  //      is only skipped when compacting would be economically pointless.
+  //   3. A stuck guard pauses automatic compaction, never manual, when it
+  //      keeps failing to shrink the context.
 
   pi.on("session_before_compact", (event, ctx) => {
     if (!isDeepSeekModel(ctx)) return;
 
-    const { preparation } = event;
-    const contextUsage = ctx.getContextUsage();
-    if (!contextUsage || contextUsage.tokens === null) return;
+    const { preparation, reason } = event;
 
-    const { contextWindow } = contextUsage;
-    if (contextWindow <= 0) return;
+    // Manual /compact or overflow recovery: always allow. No soft threshold
+    // on the context ratio — the user can compact whenever they like.
+    if (reason === "manual" || reason === "overflow") return;
 
-    const ratio = contextUsage.tokens / contextWindow;
+    // From here on we only gate AUTOMATIC compaction:
 
-    // Economic check: if the messages to summarize are too few, it's not worth
-    // the summarizer API call (and the cache-bust that follows)
+    // Economic check: if the messages to summarize are too few, it's not
+    // worth the summarizer API call (and the cache-bust that follows)
     const messagesToSummarize = preparation.messagesToSummarize?.length ?? 0;
     if (messagesToSummarize < MIN_COMPACT_MESSAGES) {
       ctx.ui.notify(
-        `Compaction skipped: only ${messagesToSummarize} messages to summarize ` +
+        `Auto-compaction skipped: only ${messagesToSummarize} messages to summarize ` +
         `(minimum ${MIN_COMPACT_MESSAGES} for economic viability).`,
         "info",
       );
       return { cancel: true };
     }
 
-    // Soft threshold: log but don't compact yet
-    if (ratio < COMPACT_SOFT_RATIO) {
-      ctx.ui.notify(
-        `Context at ${(ratio * 100).toFixed(0)}% — below soft threshold ` +
-        `${(COMPACT_SOFT_RATIO * 100).toFixed(0)}%. Compaction deferred to preserve cache.`,
-        "info",
-      );
-      return { cancel: true };
-    }
-
-    // Between soft and hard: allow but warn about cache impact
-    if (ratio < COMPACT_HARD_RATIO) {
-      const hitRate = cacheState.sessionCacheHit + cacheState.sessionCacheMiss > 0
-        ? Math.round(100 * cacheState.sessionCacheHit / (cacheState.sessionCacheHit + cacheState.sessionCacheMiss))
-        : 0;
-      ctx.ui.notify(
-        `Context at ${(ratio * 100).toFixed(0)}% — between soft ` +
-        `(${(COMPACT_SOFT_RATIO * 100).toFixed(0)}%) and hard (${(COMPACT_HARD_RATIO * 100).toFixed(0)}%) thresholds. ` +
-        `Current cache hit rate: ${hitRate}%. Compacting will reset the prefix cache.`,
-        "warning",
-      );
-      // Allow compact — let pi decide
-      return;
-    }
-
-    // Hard threshold hit, but check if we're stuck
+    // Stuck guard: if automatic compaction repeatedly fails to shrink the
+    // context, pause it so the prefix keeps a stable cache instead of being
+    // cratered every turn.
     if (cacheState.compactStuck) {
       ctx.ui.notify(
         `Auto-compaction paused: the system prompt + one turn exceeds ` +
-        `${(COMPACT_HARD_RATIO * 100).toFixed(0)}% of the context window. ` +
-        `Compaction can't help — growing append-only instead.`,
+        `the context window. Compaction can't help — growing append-only. ` +
+        `Manual /compact still works.`,
         "warning",
       );
       return { cancel: true };
     }
 
-    // Hard threshold: allow compaction, but track if it fails to help
+    // Allow automatic compaction, but track when it never helps
     cacheState.consecutiveCompacts++;
-    if (cacheState.consecutiveCompacts >= 3) {
+    if (cacheState.consecutiveCompacts >= COMPACT_STUCK_LIMIT) {
       cacheState.compactStuck = true;
       ctx.ui.notify(
-        `Compaction stuck guard triggered: ${cacheState.consecutiveCompacts} consecutive ` +
-        `compactions haven't reduced context below the threshold. Auto-compaction paused for DeepSeek.`,
+        `Auto-compaction stuck guard triggered: ${cacheState.consecutiveCompacts} consecutive ` +
+        `compactions haven't reduced context below the threshold. Automatic compaction paused; ` +
+        `manual /compact still works.`,
         "warning",
       );
       return { cancel: true };
     }
 
-    // Allow the compaction to proceed
+    // Allow the automatic compaction to proceed
     return;
   });
 
@@ -847,12 +834,17 @@ export default function (pi: ExtensionAPI) {
       const prevLen = previousSystemPrompt.length;
       const curLen = currentPrompt.length;
       const diff = curLen - prevLen;
-      console.warn(
-        `[deepseek-cache] System prompt changed between turns ` +
-        `(${prevLen} → ${curLen} chars, ${diff > 0 ? "+" : ""}${diff}). ` +
-        `This will invalidate the prefix cache. ` +
-        `Check extensions/modifications that mutate the system prompt.`
-      );
+      // Notify through the TUI rather than console.warn so the interactive
+      // renderer is never corrupted by raw stderr/stdout writes.
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          `System prompt changed between turns ` +
+          `(${prevLen} → ${curLen} chars, ${diff > 0 ? "+" : ""}${diff}). ` +
+          `This will invalidate the DeepSeek prefix cache. ` +
+          `Check extensions/modifications that mutate the system prompt.`,
+          "warning",
+        );
+      }
     }
     previousSystemPrompt = currentPrompt;
   });
