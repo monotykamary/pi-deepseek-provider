@@ -4,7 +4,7 @@
 
 **DeepSeek V4 Pro, V4 Flash & Reasoner for [pi](https://github.com/earendil-works/pi-coding-agent)**
 
-_Native DeepSeek API with 1M context, thinking mode, and prefix cache optimization._
+_Native DeepSeek API with 1M context, thinking mode, and live model sync._
 
 [![pi extension](https://img.shields.io/badge/pi-extension-blueviolet)](https://github.com/earendil-works/pi-coding-agent)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
@@ -19,7 +19,6 @@ _Native DeepSeek API with 1M context, thinking mode, and prefix cache optimizati
 - **DeepSeek V4 Flash** — Fast and affordable model with thinking mode, 1M context, and 384K max output
 - **DeepSeek Reasoner (deprecated)** — Legacy reasoning model (maps to V4 Flash thinking mode)
 - **DeepSeek Chat (deprecated)** — Legacy non-reasoning model (maps to V4 Flash non-thinking mode)
-- **Prefix Cache Optimization** — Six strategies to keep DeepSeek's automatic prefix cache warm, reducing costs by up to 99%
 - **Reasoning Effort Control** — `high`/`max` effort levels for thinking mode
 - **Anthropic API Compatible** — Also available at `https://api.deepseek.com/anthropic`
 
@@ -79,83 +78,6 @@ Get your API key at [platform.deepseek.com/api_keys](https://platform.deepseek.c
 *Costs are per million tokens. Prices subject to change — check [api-docs.deepseek.com](https://api-docs.deepseek.com/quick_start/pricing) for current pricing.*
 
 **Note:** The model names `deepseek-chat` and `deepseek-reasoner` will be deprecated on 2026/07/24. They correspond to the non-thinking mode and thinking mode of `deepseek-v4-flash`, respectively. Use `deepseek-v4-flash` and `deepseek-v4-pro` for new projects.
-
-## Prefix Cache Optimization
-
-DeepSeek offers **automatic prefix caching**: when successive API requests share the same byte-identical prefix, the cached portion is charged at the "cache hit" rate — currently **~99% cheaper** than the regular input rate. This extension implements six strategies to keep that prefix warm, ported from the [Reasonix](https://github.com/esengine/deepseek-reasonix) project's DeepSeek-specific optimizations:
-
-### 1. Schema Canonicalization
-
-Tool schemas are a large chunk of the request prefix and the most common source of cache-busting — trivial re-ordering of `required` arrays or property keys produces different bytes even though the logical schema is unchanged. This extension hooks `before_provider_request` and canonicalizes all tool schemas before the request is sent:
-
-- Sorts `required` arrays alphabetically
-- Recursively sorts JSON object keys
-- Ensures the same logical schema always produces identical bytes
-
-**Impact:** Prevents silent cache invalidation from pi's internal tool resolution order.
-
-### 2. Cache-Aware Compaction Gating
-
-Compaction is the biggest cache-killer — it kills the message history, invalidating the entire cached prefix. This extension intercepts `session_before_compact` to protect the cache **without ever blocking the user**:
-
-| Context | Behavior |
-|---------|----------|
-| Manual `/compact` | Always allowed — no soft threshold |
-| Overflow recovery | Always allowed |
-| Context threshold (pi's own rule) | Allowed; only skipped when economically wasteful |
-| Stuck (consecutive failures) | Automatic compaction paused; manual still works |
-
-- **No soft threshold:** Automatic compaction now follows pi's own rule (`contextTokens > contextWindow - reserveTokens`). A 1M-context model no longer needs to fill half the window before compacting; manual `/compact` always works at any context size.
-- **Economic check:** Skips *automatic* compaction when fewer than 4 messages would be summarized — the summarizer API call costs more than it saves. Manual compaction is never skipped.
-- **Stuck guard:** If automatic compaction repeatedly fails to reduce the context (system prompt + conversation exceeds the window), pauses *automatic* compaction so the prefix can grow append-only instead of cratering the cache every turn.
-
-**Impact:** Keeps the prefix cache warm without overriding the user's choice to compact.
-
-### 3. Cache Hit Diagnostics
-
-Tracks the prefix shape (hash of system prompt + canonical tool schemas) across turns. When the prefix changes between turns, logs a warning explaining what changed (`system-prompt-changed`, `tool-schemas-changed`) plus the previous cache hit rate. This gives you visibility into *why* your cache hit rate dropped.
-
-**Impact:** Makes cache issues debuggable instead of mysterious.
-
-### 4. Session-Aggregate Cache Display
-
-Shows the cumulative cache hit rate across the entire session in the status line (`cache 87% (~42,000 cached tokens)`). The session-aggregate rate is steadier than the volatile per-turn rate and persists across compaction events.
-
-**Impact:** Real-time visibility into whether the cache optimizations are working.
-
-### 5. Reasoning Content Stripping on Replay
-
-DeepSeek's reasoner returns `reasoning_content` in responses. Pi round-trips this as thinking content on assistant messages — every turn re-sends all prior reasoning at the full (uncached) input rate. For long agent sessions with many tool-call rounds, this accumulated thinking content can be hundreds of thousands of tokens.
-
-This extension strips thinking content from older assistant messages, keeping reasoning only from the most recent N turns (configurable via `DEEPSEEK_CACHE_KEEP_THINKING_TURNS`, default 2). Stripped thinking is replaced with `[thinking stripped for cache efficiency]`.
-
-**Tradeoff:** The model loses visibility into its own earlier reasoning, but gains cache efficiency. For long coding sessions where the model primarily relies on recent tool results and the current file state, the tradeoff is strongly favorable.
-
-**Impact:** Reduces the prefix by the size of all round-tripped thinking beyond the last N turns.
-
-### 6. System Prompt Freeze Warning
-
-DeepSeek's prefix cache requires the byte-stable prefix to remain identical across turns. Any mutation invalidates the entire cached prefix. This extension logs a warning when the system prompt changes between DeepSeek turns, helping you identify which extensions or features are busting the cache.
-
-**Impact:** Catches system-prompt mutations that would otherwise silently invalidate the cache.
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DEEPSEEK_API_KEY` | — | Your DeepSeek API key (fallback if not in auth.json) |
-| `DEEPSEEK_CACHE_STRIP_THINKING` | `"true"` | Strip older thinking content to reduce prefix size. Set to `"false"` to disable. |
-| `DEEPSEEK_CACHE_KEEP_THINKING_TURNS` | `"2"` | Number of recent turns to keep full thinking content for. Only applies when stripping is enabled. |
-| `DEEPSEEK_CACHE_PROVIDERS` | — | Comma-separated list of additional providers to enable cache optimizations for (e.g., `openrouter,together`). |
-
-### Using with Other Providers
-
-The cache optimizations activate automatically for DeepSeek models by detecting the model ID — they work regardless of which provider routes the request. Specifically, optimizations are enabled when **any** of these conditions are true:
-
-1. The provider is `deepseek` (direct API)
-2. The model ID starts with `deepseek-` or `deepseek/` (e.g., OpenRouter's `deepseek/deepseek-v4-flash`)
-3. The provider is listed in `DEEPSEEK_CACHE_PROVIDERS` env var
-
 
 ## Usage
 

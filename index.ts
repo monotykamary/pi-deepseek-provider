@@ -1,11 +1,10 @@
-import { getAgentDir, type ExtensionAPI, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import modelsData from "./models.json" with { type: "json" };
 import customModelsData from "./custom-models.json" with { type: "json" };
 import patchData from "./patch.json" with { type: "json" };
 import deprecatedData from "./deprecated-models.json" with { type: "json" };
 import fs from "fs";
 import path from "path";
-import crypto from "crypto";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -298,219 +297,6 @@ async function revalidateModels(apiKey: string | undefined, embeddedModels: Json
 let cachedApiKey: string | undefined;
 let revalidateAbort: AbortController | null = null;
 
-async function resolveApiKey(modelRegistry: ModelRegistry): Promise<void> {
-  cachedApiKey = await modelRegistry.getApiKeyForProvider("deepseek") ?? undefined;
-}
-
-// ─── Optimization 1: Schema Canonicalization ──────────────────────────────────
-//
-// DeepSeek offers automatic prefix caching: when successive requests share the
-// same byte-identical prefix, the cached portion is charged at the cheaper
-// "cache hit" rate (currently ~99% cheaper than input). Tool schemas are a
-// large chunk of that prefix and the most common source of cache-busting —
-// trivial re-ordering of `required` arrays or property keys produces different
-// bytes even though the logical schema is unchanged.
-//
-// This hook canonicalizes tool schemas before the request is sent:
-//   - Sorts `required` arrays alphabetically
-//   - Recursively sorts object keys alphabetically
-//   - Ensures the same logical schema always produces the same bytes
-
-function canonicalizeValue(v: unknown): unknown {
-  if (v === null || v === undefined) return v;
-  if (Array.isArray(v)) {
-    return v.map(canonicalizeValue);
-  }
-  if (typeof v === "object") {
-    const obj = v as Record<string, unknown>;
-    // Sort `required` arrays — the main source of cache-busting
-    if (Array.isArray(obj["required"])) {
-      obj["required"] = [...obj["required"]].sort();
-    }
-    // Sort keys for deterministic serialization
-    const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(obj).sort()) {
-      sorted[key] = canonicalizeValue(obj[key]);
-    }
-    return sorted;
-  }
-  return v;
-}
-
-function canonicalizeToolSchemas(tools: unknown[]): unknown[] {
-  if (!Array.isArray(tools)) return tools;
-  return tools.map(tool => {
-    if (!tool || typeof tool !== "object") return tool;
-    const t = { ...tool } as Record<string, unknown>;
-    if (t.function && typeof t.function === "object") {
-      const fn = { ...(t.function as Record<string, unknown>) };
-      if (fn.parameters && typeof fn.parameters === "object") {
-        fn.parameters = canonicalizeValue(fn.parameters);
-      }
-      t.function = fn;
-    }
-    return t;
-  });
-}
-
-// ─── Optimization 2: Cache-Aware Compaction Gating ──────────────────────────
-//
-// Compaction is the biggest cache-killer — it rewrites the message history,
-// invalidating the entire prefix that DeepSeek cached. The policy here is
-// deliberately permissive so caching never overrides the user:
-//
-//   - Manual `/compact` and overflow recovery: ALWAYS allowed, no soft
-//     threshold. A 1M-context model must not need to fill 500k to compact.
-//   - Automatic compaction: pi's own threshold decides
-//     (contextTokens > contextWindow - reserveTokens); nothing here defers
-//     it further.
-//   - Economic check: skip AUTO compaction when the summarizable region is
-//     too small to justify the summarizer API call.
-//   - Stuck guard: if auto-compaction repeatedly fails to shrink the
-//     context, pause automatic compaction so the prefix can keep a stable
-//     cache instead of being cratered every turn.
-//
-// We intercept `session_before_compact` to apply the protections above.
-
-const COMPACT_STUCK_LIMIT = 3;
-const MIN_COMPACT_MESSAGES = 4;
-
-// ─── Optimization 3+4: Cache Diagnostics + Session-Aggregate Display ─────────
-//
-// Track prefix shape across turns so we can explain cache misses, and accumulate
-// cache hit/miss tokens across the entire session for a steady aggregate rate.
-//
-// Prefix shape: hash(system_prompt + canonical_tools). If it changes between
-// turns, we know the cache was busted. We log what changed (system vs tools).
-//
-// Session-aggregate: sum of all cacheRead/cacheWrite tokens across all turns.
-// Steadier than the volatile single-turn rate; persists across compaction.
-
-interface PrefixShape {
-  systemHash: string;
-  toolsHash: string;
-  prefixHash: string;
-}
-
-interface CacheState {
-  prevShape: PrefixShape | null;
-  sessionCacheHit: number;
-  sessionCacheMiss: number;
-  consecutiveCompacts: number;
-  compactStuck: boolean;
-  turnCount: number;
-}
-
-function shortHash(input: string): string {
-  return crypto.createHash("sha256").update(input).digest("hex").slice(0, 16);
-}
-
-function captureShape(systemPrompt: string, tools: unknown[]): PrefixShape {
-  const toolsJson = JSON.stringify(canonicalizeToolSchemas(tools));
-  return {
-    systemHash: shortHash(systemPrompt),
-    toolsHash: shortHash(toolsJson),
-    prefixHash: shortHash(systemPrompt + "\n" + toolsJson),
-  };
-}
-
-function compareShape(
-  prev: PrefixShape | null,
-  cur: PrefixShape,
-  cacheHit: number,
-  cacheMiss: number,
-): string[] {
-  if (!prev) return [];
-  const reasons: string[] = [];
-  if (prev.systemHash !== cur.systemHash) reasons.push("system-prompt-changed");
-  if (prev.toolsHash !== cur.toolsHash) reasons.push("tool-schemas-changed");
-  return reasons;
-}
-
-// ─── Optimization 5: Strip Reasoning Content on Replay ──────────────────────
-//
-// DeepSeek's reasoner returns `reasoning_content` in responses. Pi round-trips
-// this as ThinkingContent on assistant messages. The provider requires
-// `requiresReasoningContentOnAssistantMessages: true` so that replayed messages
-// include an empty `reasoning_content` field — but the *content* of that thinking
-// is still sent as full tokens each turn, counted as uncached prompt.
-//
-// For long sessions with many tool-call rounds, this accumulated thinking content
-// can be a significant portion of the prefix. By stripping thinking content from
-// older assistant messages (keeping only the most recent N turns' thinking), we
-// reduce the prefix size and improve cache hit rates.
-//
-// This is a tradeoff: the model loses visibility into its own earlier reasoning,
-// but gains cache efficiency. The number of turns to keep thinking for is
-// configurable via DEEPSEEK_CACHE_KEEP_THINKING_TURNS (default: 2).
-
-const KEEP_THINKING_TURNS = parseInt(
-  process.env.DEEPSEEK_CACHE_KEEP_THINKING_TURNS || "2",
-  10,
-);
-
-// ─── Optimization 6: System Prompt Freeze Enforcement ──────────────────────
-//
-// DeepSeek's prefix cache requires the byte-stable prefix (system prompt + tools)
-// to remain identical across turns. Any mutation — even adding a single newline
-// to the system prompt — invalidates the entire cached prefix and forces a full
-// re-processing at the miss rate.
-//
-// This hook logs a warning when the system prompt changes between DeepSeek
-// turns, helping users identify which extensions or features are busting their
-// cache. It does NOT block the change — that would conflict with other
-// extensions — but it provides the observability needed to fix the root cause.
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-
-// Model-ID prefixes that indicate a DeepSeek model, regardless of provider.
-// Covers: deepseek-chat, deepseek-reasoner, deepseek-v4-flash, deepseek-v4-pro, etc.
-// Also covers provider-prefixed IDs like openrouter's deepseek/deepseek-v4-flash
-const DEEPSEEK_MODEL_PREFIXES = ["deepseek-", "deepseek/"];
-
-// Additional providers to enable cache optimizations for (from env var).
-// Set DEEPSEEK_CACHE_PROVIDERS=openrouter,together to enable for those providers.
-const extraCacheProviders = new Set(
-  (process.env.DEEPSEEK_CACHE_PROVIDERS || "").split(",").map(p => p.trim()).filter(Boolean)
-);
-
-function isDeepSeekModel(ctx: { model?: { provider?: string; id?: string } }): boolean {
-  const provider = ctx.model?.provider;
-  const id = ctx.model?.id ?? "";
-
-  // 1. Native deepseek provider always matches
-  if (provider === "deepseek") return true;
-
-  // 2. Match by model ID prefix (e.g. openrouter/deepseek-v4-flash)
-  if (DEEPSEEK_MODEL_PREFIXES.some(prefix => id.startsWith(prefix))) return true;
-
-  // 3. Explicit provider allowlist via env var
-  if (provider && extraCacheProviders.has(provider)) return true;
-
-  return false;
-}
-
-function extractPayloadInfo(payload: unknown): {
-  systemPrompt: string;
-  tools: unknown[];
-  messages: unknown[];
-} {
-  const p = payload as Record<string, unknown>;
-  // OpenAI Chat Completions format
-  const messages = Array.isArray(p.messages) ? p.messages : [];
-  // System prompt may be in the first message with role "system" or "developer"
-  let systemPrompt = "";
-  const tools = Array.isArray(p.tools) ? p.tools : [];
-  if (messages.length > 0) {
-    const first = messages[0] as Record<string, unknown>;
-    if (first.role === "system" || first.role === "developer") {
-      systemPrompt = typeof first.content === "string" ? first.content : JSON.stringify(first.content);
-    }
-  }
-  return { systemPrompt, tools, messages };
-}
-
 // ─── Extension Entry Point ───────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -529,18 +315,6 @@ export default function (pi: ExtensionAPI) {
     models: staleModels,
   });
 
-  // Session-scoped cache state
-  const cacheState: CacheState = {
-    prevShape: null,
-    sessionCacheHit: 0,
-    sessionCacheMiss: 0,
-    consecutiveCompacts: 0,
-    compactStuck: false,
-    turnCount: 0,
-  };
-
-  let previousSystemPrompt: string | null = null;
-
   // Revalidate in background: fetch live → merge → cache → hot-swap
   //
   // Key resolution must NOT touch ctx — the session_start handler runs before
@@ -554,14 +328,6 @@ export default function (pi: ExtensionAPI) {
     revalidateAbort?.abort();
     revalidateAbort = new AbortController();
 
-    // Reset cache diagnostics state on new session
-    cacheState.prevShape = null;
-    cacheState.sessionCacheHit = 0;
-    cacheState.sessionCacheMiss = 0;
-    cacheState.consecutiveCompacts = 0;
-    cacheState.compactStuck = false;
-    cacheState.turnCount = 0;
-    previousSystemPrompt = null;
     keyResolved = false;
   });
 
@@ -569,283 +335,30 @@ export default function (pi: ExtensionAPI) {
     revalidateAbort?.abort();
   });
 
-  // ── Optimization 1: Schema Canonicalization ────────────────────────────────
-  //
-  // Hook before_provider_request to canonicalize tool schemas in the payload.
-  // This ensures DeepSeek's prefix cache sees identical bytes even if pi's
-  // internal tool resolution subtly re-orders properties.
+  // Lazy key resolution + SWR revalidation: fire once per session on the
+  // first request to this provider, when we know the session is stable.
+  pi.on("before_provider_request", (_event, ctx) => {
+    if (ctx.model?.provider !== "deepseek") return;
+    if (keyResolved) return;
+    keyResolved = true;
 
-  pi.on("before_provider_request", (event, ctx) => {
-    if (!isDeepSeekModel(ctx)) return;
-
-    // Lazy key resolution + SWR revalidation: fire once per session on the
-    // first provider request, when we know the sesion is stable.
-    if (!keyResolved) {
-      keyResolved = true;
-      ctx.modelRegistry.getApiKeyForProvider("deepseek").then((key: string | undefined) => {
-        cachedApiKey = key ?? undefined;
-        const signal = revalidateAbort?.signal;
-        if (!signal?.aborted) {
-          revalidateModels(cachedApiKey, embeddedModels, signal).then((freshBase) => {
-            if (freshBase && !signal?.aborted) {
-              pi.registerProvider("deepseek", {
-                baseUrl: BASE_URL,
-                apiKey: "$DEEPSEEK_API_KEY",
-                api: "openai-completions",
-                models: buildModels(freshBase, customModels, patches),
-              });
-            }
-          });
-        }
-      }).catch(() => {
-        // Key resolution failure is non-fatal
-      });
-    }
-
-    const payload = event.payload as Record<string, unknown>;
-    if (!payload || !Array.isArray(payload.tools)) return;
-
-    payload.tools = canonicalizeToolSchemas(payload.tools);
-
-    // ── Optimization 3: Cache Diagnostics ──────────────────────────────────
-    //
-    // Capture the prefix shape after canonicalization and compare with the
-    // previous turn's shape. If the prefix changed, log what changed so the
-    // user can diagnose cache misses.
-
-    const { systemPrompt, tools, messages } = extractPayloadInfo(payload);
-    const shape = captureShape(systemPrompt, tools);
-    const reasons = compareShape(cacheState.prevShape, shape, cacheState.sessionCacheHit, cacheState.sessionCacheMiss);
-
-    if (reasons.length > 0) {
-      const pct = cacheState.sessionCacheHit + cacheState.sessionCacheMiss > 0
-        ? Math.round(100 * cacheState.sessionCacheHit / (cacheState.sessionCacheHit + cacheState.sessionCacheMiss))
-        : 0;
-      // Notify through the TUI instead of raw console output — a direct
-      // console.warn from an extension corrupts pi's interactive renderer.
-      if (ctx.hasUI) {
-        ctx.ui.notify(
-          `Prefix cache changed: ${reasons.join(", ")} — ` +
-          `previous cache hit rate was ${pct}% across ${cacheState.turnCount} turns`,
-          "warning",
-        );
-      }
-    }
-
-    cacheState.prevShape = shape;
-
-    return payload;
-  });
-
-  // ── Optimization 4: Session-Aggregate Cache Display ────────────────────────
-  //
-  // Accumulate cache tokens from each assistant message and render the
-  // aggregate rate in the status line. The session-aggregate rate is steadier
-  // than the volatile per-turn rate because it encompasses the full session
-  // and is unaffected by compaction events.
-
-  pi.on("message_end", (event, ctx) => {
-    // Non-DeepSeek model: clear any stale cache status so it doesn't linger
-    // from a previous DeepSeek turn.
-    if (!isDeepSeekModel(ctx)) {
-      ctx.ui.setStatus("deepseek-cache", undefined);
-      return;
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const msg = event.message as any;
-    if (msg.role !== "assistant") return;
-
-    const usage = msg.usage as Record<string, number> | undefined;
-    if (!usage) return;
-
-    const hit = usage.cacheRead ?? 0;
-    const miss = usage.cacheWrite ?? 0;
-
-    cacheState.sessionCacheHit += hit;
-    cacheState.sessionCacheMiss += miss;
-    cacheState.turnCount++;
-
-    const totalHit = cacheState.sessionCacheHit;
-    const totalMiss = cacheState.sessionCacheMiss;
-    const total = totalHit + totalMiss;
-
-    if (total > 0 && ctx.hasUI) {
-      const rate = Math.round(100 * totalHit / total);
-      const costSavings = hit > 0 ? ` (~${hit.toLocaleString()} cached tokens)` : "";
-      const plainText = `cache ${rate}%${costSavings}`;
-      // Apply dim (grey) styling to match the rest of the pi footer
-      const styledText = ctx.ui.theme?.fg("dim", plainText) ?? plainText;
-      ctx.ui.setStatus("deepseek-cache", styledText);
-
-      // Reset compaction stuck guard if the session is healthy
-      if (rate >= 50) {
-        cacheState.consecutiveCompacts = 0;
-        cacheState.compactStuck = false;
-      }
-    }
-  });
-
-  // ── Optimization 2: Cache-Aware Compaction Gating ───────────────────────
-  //
-  // Compaction can never override the user. Goals:
-  //   1. Manual `/compact` and overflow recovery ALWAYS proceed — there is
-  //      no soft threshold, so a 1M-context model can compact at any size.
-  //   2. Automatic (threshold) compaction follows pi's own trigger rule; it
-  //      is only skipped when compacting would be economically pointless.
-  //   3. A stuck guard pauses automatic compaction, never manual, when it
-  //      keeps failing to shrink the context.
-
-  pi.on("session_before_compact", (event, ctx) => {
-    if (!isDeepSeekModel(ctx)) return;
-
-    const { preparation, reason } = event;
-
-    // Manual /compact or overflow recovery: always allow. No soft threshold
-    // on the context ratio — the user can compact whenever they like.
-    if (reason === "manual" || reason === "overflow") return;
-
-    // From here on we only gate AUTOMATIC compaction:
-
-    // Economic check: if the messages to summarize are too few, it's not
-    // worth the summarizer API call (and the cache-bust that follows)
-    const messagesToSummarize = preparation.messagesToSummarize?.length ?? 0;
-    if (messagesToSummarize < MIN_COMPACT_MESSAGES) {
-      ctx.ui.notify(
-        `Auto-compaction skipped: only ${messagesToSummarize} messages to summarize ` +
-        `(minimum ${MIN_COMPACT_MESSAGES} for economic viability).`,
-        "info",
-      );
-      return { cancel: true };
-    }
-
-    // Stuck guard: if automatic compaction repeatedly fails to shrink the
-    // context, pause it so the prefix keeps a stable cache instead of being
-    // cratered every turn.
-    if (cacheState.compactStuck) {
-      ctx.ui.notify(
-        `Auto-compaction paused: the system prompt + one turn exceeds ` +
-        `the context window. Compaction can't help — growing append-only. ` +
-        `Manual /compact still works.`,
-        "warning",
-      );
-      return { cancel: true };
-    }
-
-    // Allow automatic compaction, but track when it never helps
-    cacheState.consecutiveCompacts++;
-    if (cacheState.consecutiveCompacts >= COMPACT_STUCK_LIMIT) {
-      cacheState.compactStuck = true;
-      ctx.ui.notify(
-        `Auto-compaction stuck guard triggered: ${cacheState.consecutiveCompacts} consecutive ` +
-        `compactions haven't reduced context below the threshold. Automatic compaction paused; ` +
-        `manual /compact still works.`,
-        "warning",
-      );
-      return { cancel: true };
-    }
-
-    // Allow the automatic compaction to proceed
-    return;
-  });
-
-  // ── Optimization 5: Strip Reasoning Content on Replay ─────────────────────
-  //
-  // DeepSeek round-trips reasoning_content (chain-of-thought) on every turn as
-  // uncached prompt tokens. For long sessions this is expensive. Strip thinking
-  // content from older assistant messages to reduce the prefix, keeping
-  // reasoning only from the most recent N turns.
-  //
-  // This trades reasoning visibility for cache efficiency. The model can still
-  // see its recent reasoning; only older thinking is pruned.
-  //
-  // Controlled by DEEPSEEK_CACHE_STRIP_THINKING (default: "true") and
-  // DEEPSEEK_CACHE_KEEP_THINKING_TURNS (default: "2").
-
-  const stripThinking = process.env.DEEPSEEK_CACHE_STRIP_THINKING !== "false";
-
-  pi.on("context", (event, ctx) => {
-    if (!stripThinking) return;
-    if (!isDeepSeekModel(ctx)) return;
-
-    const messages = event.messages;
-    if (!messages || messages.length === 0) return;
-
-    // Find the boundary: keep thinking for the last N user-turns
-    // Count backwards from the end to find the last N user messages
-    let userTurnCount = 0;
-    let boundaryIdx = messages.length;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const msg = messages[i] as any;
-      if (msg.role === "user") {
-        userTurnCount++;
-        if (userTurnCount >= KEEP_THINKING_TURNS) {
-          boundaryIdx = i;
-          break;
-        }
-      }
-    }
-
-    // Strip thinking content from messages before the boundary
-    let modified = false;
-    for (let i = 0; i < boundaryIdx; i++) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const msg = messages[i] as any;
-      if (msg.role !== "assistant") continue;
-
-      // Pi stores thinking as content items with type "thinking"
-      const content = msg.content;
-      if (!Array.isArray(content)) continue;
-
-      const hasThinking = content.some(
-        (c: any) => c.type === "thinking"
-      );
-      if (!hasThinking) continue;
-
-      // Replace thinking blocks with a minimal stub that preserves the
-      // required reasoning_content structure but without the expensive text
-      msg.content = content.map(
-        (c: any) => {
-          if (c.type === "thinking") {
-            return { ...c, thinking: "[thinking stripped for cache efficiency]" };
+    ctx.modelRegistry.getApiKeyForProvider("deepseek").then((key: string | undefined) => {
+      cachedApiKey = key ?? undefined;
+      const signal = revalidateAbort?.signal;
+      if (!signal?.aborted) {
+        revalidateModels(cachedApiKey, embeddedModels, signal).then((freshBase) => {
+          if (freshBase && !signal?.aborted) {
+            pi.registerProvider("deepseek", {
+              baseUrl: BASE_URL,
+              apiKey: "$DEEPSEEK_API_KEY",
+              api: "openai-completions",
+              models: buildModels(freshBase, customModels, patches),
+            });
           }
-          return c;
-        }
-      );
-      modified = true;
-    }
-
-    if (modified) {
-      return { messages };
-    }
-  });
-
-  // ── Optimization 6: System Prompt Freeze Enforcement ──────────────────────
-  //
-  // Log a warning when the system prompt changes between DeepSeek turns.
-  // This does NOT block the change — only provides observability.
-
-  pi.on("before_agent_start", (event, ctx) => {
-    if (!isDeepSeekModel(ctx)) return;
-
-    const currentPrompt = event.systemPrompt;
-    if (previousSystemPrompt !== null && currentPrompt !== previousSystemPrompt) {
-      const prevLen = previousSystemPrompt.length;
-      const curLen = currentPrompt.length;
-      const diff = curLen - prevLen;
-      // Notify through the TUI rather than console.warn so the interactive
-      // renderer is never corrupted by raw stderr/stdout writes.
-      if (ctx.hasUI) {
-        ctx.ui.notify(
-          `System prompt changed between turns ` +
-          `(${prevLen} → ${curLen} chars, ${diff > 0 ? "+" : ""}${diff}). ` +
-          `This will invalidate the DeepSeek prefix cache. ` +
-          `Check extensions/modifications that mutate the system prompt.`,
-          "warning",
-        );
+        });
       }
-    }
-    previousSystemPrompt = currentPrompt;
+    }).catch(() => {
+      // Key resolution failure is non-fatal
+    });
   });
 }
