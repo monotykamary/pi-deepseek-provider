@@ -54,5 +54,21 @@
       "supportsReasoningEffort": true,
       "requiresReasoningContentOnAssistantMessages": true
     }
+  },
+  {
+    "id": "deepseek-v4-flash-vision-exp",
+    "name": "DeepSeek V4 flash vision exp",
+    "reasoning": false,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "contextWindow": 131072,
+    "maxTokens": 16384
   }
 ]
