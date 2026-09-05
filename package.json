@@ -1,6 +1,6 @@
 {
   "name": "pi-deepseek-provider",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "DeepSeek provider extension for pi - V4 Pro, V4 Flash & Reasoner with 1M context and thinking mode",
   "type": "module",
   "main": "index.ts",
@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "@earendil-works/pi-coding-agent": "0.85.1"
   }
 }
