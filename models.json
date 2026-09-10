@@ -28,36 +28,8 @@
     }
   },
   {
-    "id": "deepseek-v4-flash",
-    "name": "DeepSeek V4 Flash",
-    "reasoning": true,
-    "input": [
-      "text"
-    ],
-    "cost": {
-      "input": 0.14,
-      "output": 0.28,
-      "cacheRead": 0.0028,
-      "cacheWrite": 0
-    },
-    "contextWindow": 1000000,
-    "maxTokens": 384000,
-    "thinkingLevelMap": {
-      "minimal": null,
-      "low": null,
-      "medium": null,
-      "high": "high",
-      "max": "max"
-    },
-    "compat": {
-      "thinkingFormat": "deepseek",
-      "supportsReasoningEffort": true,
-      "requiresReasoningContentOnAssistantMessages": true
-    }
-  },
-  {
-    "id": "deepseek-v4-flash-vision-exp",
-    "name": "DeepSeek V4 flash vision exp",
+    "id": "deepseek-flash",
+    "name": "Deepseek Flash",
     "reasoning": false,
     "input": [
       "text"
