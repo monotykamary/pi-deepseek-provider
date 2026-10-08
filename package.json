@@ -30,10 +30,13 @@
       "./index.ts"
     ]
   },
+  "overrides": {
+    "brace-expansion": "5.0.12"
+  },
   "devDependencies": {
     "@types/node": "^25.9.1",
     "typescript": "^6.0.3",
-    "@earendil-works/pi-coding-agent": "1.0.0"
+    "@earendil-works/pi-coding-agent": "1.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
