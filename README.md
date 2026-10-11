@@ -26,6 +26,7 @@ Run `bun run test:pi` for offline manifest, catalog, lifecycle and streaming che
 - **DeepSeek Chat (deprecated)** — Legacy non-reasoning model (maps to V4 Flash non-thinking mode)
 - **Reasoning Effort Control** — `high`/`max` effort levels for thinking mode
 - **Anthropic API Compatible** — Also available at `https://api.deepseek.com/anthropic`
+- **Quiet live model sync** — Models refresh from the DeepSeek API in the background, at most hourly and by one pi process at a time ([details](#model-sync))
 
 ## Installation
 
@@ -123,6 +124,13 @@ The DeepSeek API key can be configured in multiple ways (resolved in this order)
 
 Get your API key at [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys).
 
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DEEPSEEK_API_KEY` | No | Your DeepSeek API key (fallback if not in auth.json) |
+| `PI_PROVIDER_SYNC_TTL_MS` | No | Model sync freshness window in ms (default `3600000`; `0` = revalidate every session) |
+
 ## Configuration
 
 Add to your pi configuration for automatic loading:
@@ -150,6 +158,21 @@ The `patch.json` file contains overrides that are applied on top of `models.json
 - Correcting API-derived values (e.g., marking a model as reasoning-capable)
 - Adding compat settings that the API doesn't provide
 - Overriding pricing when official rates change
+
+## Model sync
+
+Neither startup nor requests wait on the network. pi starts with the cached catalog
+(`~/.pi/agent/cache/deepseek-models.json`, falling back to the bundled `models.json`) and, on a session's first
+DeepSeek request, revalidates against `/models` in the background — only when:
+
+- a DeepSeek API key is configured (no key, no request),
+- the cache is older than 1 hour, missing, or was fetched with a different API key, and
+- no other pi process is already refreshing it (a `deepseek-models.lock` file next to the cache).
+
+So `/new`, `/reload`, `pi -p` and fan-out child agents share one cache instead of each calling the API; a
+session that skips the fetch still picks up a cache another process refreshed. A failed refresh is retried after
+5 minutes at the earliest. `PI_PROVIDER_SYNC_TTL_MS` changes the window (`0` revalidates in every session).
+Only a hash fingerprint of the key is stored (`deepseek-models.sync.json`), never the key itself.
 
 ## Updating Models
 

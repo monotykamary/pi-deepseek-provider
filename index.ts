@@ -5,6 +5,7 @@ import patchData from "./patch.json" with { type: "json" };
 import deprecatedData from "./deprecated-models.json" with { type: "json" };
 import fs from "fs";
 import path from "path";
+import { acquireModelSync, cacheChangedSinceLoad, markCacheLoaded, writeFileAtomic } from "./sync-policy";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -201,7 +202,8 @@ function loadCachedModels(): JsonModel[] | null {
 function cacheModels(models: JsonModel[]): void {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(CACHE_PATH, JSON.stringify(models, null, 2) + "\n");
+    // Atomic (tmp + rename): other pi processes may be reading the cache right now.
+    writeFileAtomic(CACHE_PATH, JSON.stringify(models, null, 2) + "\n");
   } catch {
     // Cache write failure is non-fatal
   }
@@ -273,6 +275,7 @@ function withDeprecated(models: JsonModel[]): JsonModel[] {
 }
 
 function loadStaleModels(embeddedModels: JsonModel[]): JsonModel[] {
+  markCacheLoaded(CACHE_PATH); // stat before read: lets session_start spot newer caches
   const cached = loadCachedModels();
   if (!cached || cached.length === 0) return embeddedModels;
 
@@ -285,13 +288,26 @@ function loadStaleModels(embeddedModels: JsonModel[]): JsonModel[] {
   return cached;
 }
 
-async function revalidateModels(apiKey: string | undefined, embeddedModels: JsonModel[], signal?: AbortSignal): Promise<JsonModel[] | null> {
-  if (!apiKey) return null;
-  const liveModels = await fetchLiveModels(apiKey, signal);
-  if (!liveModels || liveModels.length === 0) return null;
-  const merged = mergeWithEmbedded(liveModels, embeddedModels);
-  cacheModels(merged);
-  return merged;
+/**
+ * Background revalidation, gated by the quiet startup sync policy
+ * (sync-policy.ts): no key → no fetch; fresh cache (TTL) → no fetch; another
+ * process already fetching → no fetch. When skipped, a cache that another
+ * process refreshed since we loaded it is adopted from disk instead.
+ * `force` bypasses the TTL (e.g. after /login); it is still single-flight.
+ */
+async function revalidateModels(apiKey: string | undefined, embeddedModels: JsonModel[], signal?: AbortSignal, force = false): Promise<JsonModel[] | null> {
+  const lease = acquireModelSync({ cachePath: CACHE_PATH, apiKey, force });
+  if (!lease) return cacheChangedSinceLoad(CACHE_PATH) ? loadStaleModels(embeddedModels) : null;
+  let merged: JsonModel[] | null = null;
+  try {
+    const liveModels = apiKey ? await fetchLiveModels(apiKey, signal) : null;
+    if (!liveModels || liveModels.length === 0) return null;
+    merged = mergeWithEmbedded(liveModels, embeddedModels);
+    cacheModels(merged);
+    return merged;
+  } finally {
+    lease.release(merged ? "fetched" : signal?.aborted ? "aborted" : "failed");
+  }
 }
 
 let cachedApiKey: string | undefined;
@@ -316,6 +332,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Revalidate in background: fetch live → merge → cache → hot-swap
+  // Quiet startup sync (sync-policy.ts): only with an API key, only when the
+  // disk cache is older than the TTL (1h, PI_PROVIDER_SYNC_TTL_MS) or the key
+  // changed, and only one pi process at a time (lock file next to the cache).
   //
   // Key resolution must NOT touch ctx — the session_start handler runs before
   // pi's own session replacement (e.g. --no-session → ephemeral), so any async
@@ -337,28 +356,32 @@ export default function (pi: ExtensionAPI) {
 
   // Lazy key resolution + SWR revalidation: fire once per session on the
   // first request to this provider, when we know the session is stable.
+  // Fire-and-forget: the request is never held up by the catalog fetch, and the
+  // fetch itself is gated by the quiet startup sync policy (sync-policy.ts), so
+  // most sessions skip it. Every rejection is swallowed.
   pi.on("before_provider_request", (_event, ctx) => {
     if (ctx.model?.provider !== "deepseek") return;
     if (keyResolved) return;
     keyResolved = true;
 
-    ctx.modelRegistry.getApiKeyForProvider("deepseek").then((key: string | undefined) => {
-      cachedApiKey = key ?? undefined;
-      const signal = revalidateAbort?.signal;
-      if (!signal?.aborted) {
-        revalidateModels(cachedApiKey, embeddedModels, signal).then((freshBase) => {
-          if (freshBase && !signal?.aborted) {
-            pi.registerProvider("deepseek", {
-              baseUrl: BASE_URL,
-              apiKey: "$DEEPSEEK_API_KEY",
-              api: "openai-completions",
-              models: buildModels(freshBase, customModels, patches),
-            });
-          }
-        });
-      }
-    }).catch(() => {
-      // Key resolution failure is non-fatal
-    });
+    const signal = revalidateAbort?.signal;
+    const modelRegistry = ctx.modelRegistry;
+    void Promise.resolve()
+      .then(() => modelRegistry.getApiKeyForProvider("deepseek"))
+      .then((key: string | undefined) => {
+        cachedApiKey = key ?? undefined;
+        return signal?.aborted ? null : revalidateModels(cachedApiKey, embeddedModels, signal);
+      })
+      .then((freshBase) => {
+        if (freshBase && !signal?.aborted) {
+          pi.registerProvider("deepseek", {
+            baseUrl: BASE_URL,
+            apiKey: "$DEEPSEEK_API_KEY",
+            api: "openai-completions",
+            models: buildModels(freshBase, customModels, patches),
+          });
+        }
+      })
+      .catch(() => { /* key resolution / revalidation failure is non-fatal */ });
   });
 }
