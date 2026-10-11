@@ -35,12 +35,16 @@
     "brace-expansion": "5.0.12"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0",
     "@types/node": "^25.9.1",
     "typescript": "^6.0.3",
-    "@earendil-works/pi-coding-agent": "1.1.0",
     "vitest": "4.1.7"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monotykamary/pi-deepseek-provider.git"
   }
 }
